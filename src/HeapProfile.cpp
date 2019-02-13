@@ -5,12 +5,18 @@
 #include <string>
 #include <vector>
 
+#include "Allocators.hpp"
+
+using Allocator = Malloc;
+
 struct Allocation
 {
 	std::vector<void*> Allocs;
 	size_t Size;
 	long long Time;
 };
+
+long long TotalDuration = 0;
 
 std::string AsSize(const size_t size)
 {
@@ -41,7 +47,7 @@ Allocation Allocate(const size_t size, const long long previousTime = 0)
 
 	for (size_t i = 0; i < allocs.size(); ++i)
 	{
-		allocs[i] = malloc(size);
+		allocs[i] = Allocator::Alloc(size);
 	}
 
 	std::chrono::high_resolution_clock::time_point end = std::chrono::high_resolution_clock::now();
@@ -51,6 +57,8 @@ Allocation Allocate(const size_t size, const long long previousTime = 0)
 		std::cout << "Alloc " << allocs.size() << " * " << AsSize(size) << " = " << duration << "ms (" << duration - previousTime << "ms delta)\n";
 	else
 		std::cout << "Alloc " << allocs.size() << " * " << AsSize(size) << " = " << duration << "ms\n";
+
+	TotalDuration += duration;
 
 	return { std::move(allocs), size, duration };
 }
@@ -65,7 +73,7 @@ void FreeEvery(Allocation &allocation, const size_t every)
 	{
 		if (allocation.Allocs[i])
 		{
-			free(allocation.Allocs[i]);
+			Allocator::Free(allocation.Allocs[i], allocation.Size);
 			allocation.Allocs[i] = nullptr;
 			++count;
 		}
@@ -74,9 +82,11 @@ void FreeEvery(Allocation &allocation, const size_t every)
 	std::chrono::high_resolution_clock::time_point end = std::chrono::high_resolution_clock::now();
 	const long long duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 	std::cout << "Freed " << count << " blocks (of size " << AsSize(allocation.Size) << ") = " << duration << "ms\n";
+
+	TotalDuration += duration;
 }
 
-void Write(Allocation &allocation, const int fill)
+void Write(Allocation &allocation, const std::byte fill)
 {
 	std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
 
@@ -86,7 +96,7 @@ void Write(Allocation &allocation, const int fill)
 	{
 		if (alloc)
 		{
-			memset(alloc, fill, allocation.Size);
+			memset(alloc, std::to_integer<int>(fill), allocation.Size);
 			++count;
 		}
 	}
@@ -94,10 +104,16 @@ void Write(Allocation &allocation, const int fill)
 	std::chrono::high_resolution_clock::time_point end = std::chrono::high_resolution_clock::now();
 	const long long duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 	std::cout << "Wrote " << count << " blocks (of size " << AsSize(allocation.Size) << ") = " << duration << "ms\n";
+
+	TotalDuration += duration;
 }
 
 int main(int argc, char *argv[])
 {
+	std::cout << "Using allocator: " << Allocator::Name() << "\n\n";
+
+	Allocator::Create();
+
 	std::vector<Allocation> allocations =
 	{
 		Allocate(1),
@@ -141,6 +157,15 @@ int main(int argc, char *argv[])
 		allocations.push_back(Allocate(allocation.Size, allocation.Time));
 	}
 
+	std::cout << "\nWriting to all allocations...\n";
+
+	for (Allocation &allocation : allocations)
+	{
+		Write(allocation, static_cast<std::byte>(reinterpret_cast<std::ptrdiff_t>(&allocation) & 0xFF));
+	}
+
+	std::cout << "\nTotal time: " << std::fixed << std::setprecision(3) << TotalDuration / 1000.0 << "s\n";
+
 	std::cout << "\nCalculating hash of all memory addresses as return value...\n";
 
 	int hash = 0;
@@ -152,6 +177,8 @@ int main(int argc, char *argv[])
 			hash ^= reinterpret_cast<std::ptrdiff_t>(mem);
 		}
 	}
+
+	Allocator::Destroy();
 
 	return hash;
 }
